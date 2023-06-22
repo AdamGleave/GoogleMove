@@ -1,7 +1,7 @@
+import logging
 import os
 import traceback
 
-from log import logger
 from google.oauth2.credentials import Credentials
 from googleapiclient.errors import HttpError
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -11,7 +11,7 @@ from google.auth.transport.requests import Request
 CLIENT_SECRET_FILE = 'downloaded_credentials_file.json'
 SCOPES = ['https://www.googleapis.com/auth/drive']
 Q_FOLDERSONLY = "mimeType = 'application/vnd.google-apps.folder'"
-
+logger = logging.getLogger(__name__)
 
 def authenticate():
     """
@@ -21,7 +21,7 @@ def authenticate():
                    'If this is not your first time, you probably are missing a refresh token.')
     flow = InstalledAppFlow.from_client_secrets_file(
         CLIENT_SECRET_FILE, SCOPES)
-    return flow.run_local_server(port=8080)
+    return flow.run_local_server(port=8083)
 
 
 def get_creds_from_token_file():
@@ -79,6 +79,7 @@ class DriveClient:
         q = f"parents = '{folder_id}'"
         if folders_only:
             q += " and mimeType = 'application/vnd.google-apps.folder'"
+        q += " and trashed=false"
 
         return self.service.files().list(q=q,
                                          fields='nextPageToken, files(id, name, mimeType)',
@@ -122,7 +123,7 @@ class DriveClient:
         r = self.service.files().copy(fileId=file_id, fields='id', supportsAllDrives=True).execute()
         return r.get('id')
 
-    def _move_file_location(self, old_folder: str, new_folder: str, file_id: str):
+    def _move_file_location(self, old_folder: str, new_folder: str, file_id: str, copy_on_error: bool = True):
         try:
             self.service.files().update(supportsAllDrives=True, fileId=file_id, addParents=new_folder,
                                         removeParents=old_folder, fields='id, parents'
@@ -132,12 +133,17 @@ class DriveClient:
             err_reason = httpe.error_details[0].get('reason')
             if err_reason == 'cannotMoveTrashedItemIntoTeamDrive':
                 pass
+            elif err_reason == 'fileWriterTeamDriveMoveInDisabled':
+                logger.info(f'User does not own %s; skipping.', file_id)
             elif err_reason in ['fileOwnerNotMemberOfTeamDrive', 'fileOwnerNotMemberOfWriterDomain']:
-                # when moving files to a shared drive, if original file owner isn't a member of it
-                copy_id = self.copy_file(file_id)
-                self._move_file_location(old_folder, new_folder, copy_id)
-                logger.info(f'Owner of {file_id} is not a member of the destination drive; '
-                            f'moved a copy to {new_folder} instead')
+                if copy_on_error:
+                    # when moving files to a shared drive, if original file owner isn't a member of it
+                    copy_id = self.copy_file(file_id)
+                    self._move_file_location(old_folder, new_folder, copy_id)
+                    logger.info(f'Owner of {file_id} is not a member of the destination drive; '
+                                f'moved a copy to {new_folder} instead')
+                else:
+                    logger.info(f'Owner of {file_id} is not a member of the destination drive; skipping.')
             else:
                 logger.critical(f'ERROR {httpe.status_code} while processing {old_folder}/{file_id} with reason '
                                 f'{httpe.reason}. Details: {httpe.error_details}')

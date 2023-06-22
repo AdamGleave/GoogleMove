@@ -1,4 +1,5 @@
 token.json
+token.json*
 downloaded_credentials_file.json
 variables.py
 zd_ticket_fields
@@ -10,3 +11,4 @@ venv
 .DS_STORE
 out.log
 done
+__pycache__/
